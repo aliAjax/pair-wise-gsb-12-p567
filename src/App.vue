@@ -1,190 +1,52 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, ref } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { useDispatchStore } from "./store";
+import { failureSimulator } from "./storage";
+import type { Leg } from "./types";
+import TaskBoard from "./components/TaskBoard.vue";
+import PendingPool from "./components/PendingPool.vue";
+import VehiclesPanel from "./components/VehiclesPanel.vue";
+import DriversPanel from "./components/DriversPanel.vue";
+import HandoverLog from "./components/HandoverLog.vue";
+import DispatchDialog from "./components/DispatchDialog.vue";
+import CreateTaskDialog from "./components/CreateTaskDialog.vue";
 
-type Field = {
-  key: string;
-  label: string;
-  type?: "number" | "date" | "select";
-  options?: readonly string[];
-};
+const store = useDispatchStore();
 
-type RecordItem = {
-  id: string;
-  status: string;
-  notes: string;
-  createdAt: string;
-  [key: string]: string | number;
-};
+const operator = ref("调度员A");
+const operators = ["调度员A", "调度员B"];
 
-const project = {
-  "number": 3,
-  "folder": "dfwl/frontend/dfwlfront-3",
-  "framework": "vue",
-  "title": "车辆调度小工具",
-  "subtitle": "维护车辆、司机和任务状态，为空闲车辆分配配送任务。",
-  "industry": "物流",
-  "stack": [
-    "Vue3",
-    "Vite",
-    "TypeScript",
-    "Pinia",
-    "Naive UI"
-  ],
-  "storageKey": "dfwlfront-3-dispatch",
-  "formTitle": "新增配送任务",
-  "primaryAction": "分配任务",
-  "entityLabel": "车辆",
-  "statuses": [
-    "空闲",
-    "执行中",
-    "已完成"
-  ],
-  "filters": [
-    "全部区域",
-    "城北",
-    "城东",
-    "城南"
-  ],
-  "fields": [
-    {
-      "key": "vehicle",
-      "label": "车牌号"
-    },
-    {
-      "key": "driver",
-      "label": "司机"
-    },
-    {
-      "key": "zone",
-      "label": "配送区域",
-      "type": "select",
-      "options": [
-        "城北",
-        "城东",
-        "城南"
-      ]
-    },
-    {
-      "key": "task",
-      "label": "配送任务"
-    }
-  ],
-  "records": [
-    {
-      "vehicle": "沪A-82L6",
-      "driver": "董飞",
-      "zone": "城北",
-      "task": "商超补货",
-      "status": "空闲",
-      "notes": "可立即派车"
-    },
-    {
-      "vehicle": "沪B-73K9",
-      "driver": "周航",
-      "zone": "城东",
-      "task": "医药配送",
-      "status": "执行中",
-      "notes": "预计17:30返回"
-    }
-  ],
-  "metricLabels": [
-    "车辆总数",
-    "执行中",
-    "空闲车辆"
-  ]
-} as const;
+const dispatchVisible = ref(false);
+const activeLeg = ref<Leg | null>(null);
+const createVisible = ref(false);
 
-const fields = project.fields as readonly Field[];
-const statuses = [...project.statuses];
-
-function createBlank() {
-  return Object.fromEntries(fields.map((field) => [field.key, field.type === "number" ? 0 : ""]));
+function openDispatch(leg: Leg) {
+  activeLeg.value = leg;
+  dispatchVisible.value = true;
 }
 
-function loadRecords(): RecordItem[] {
-  const raw = localStorage.getItem(project.storageKey);
-  if (!raw) {
-    return project.records.map((record, index) => ({
-      ...record,
-      id: `seed-${index + 1}`,
-      createdAt: new Date(Date.now() - index * 86400000).toISOString()
-    })) as RecordItem[];
-  }
+/** 演示用：模拟接下来一次保存失败（验证“保存失败后从最近完整记录恢复”） */
+function simulateFailOnce() {
+  failureSimulator.failNextWrites(1);
+  ElMessage.warning("已让下一次保存失败：提交派车/登记后将自动回滚到最近完整记录");
+}
+
+async function resetAll() {
   try {
-    return JSON.parse(raw) as RecordItem[];
+    await ElMessageBox.confirm("将清空本地数据并恢复演示数据，是否继续？", "重置数据", {
+      confirmButtonText: "重置",
+      cancelButtonText: "取消",
+      type: "warning"
+    });
+    const r = store.resetAll();
+    r.ok ? ElMessage.success(r.message) : ElMessage.error(r.message);
   } catch {
-    return [];
+    /* 取消 */
   }
 }
 
-const records = ref<RecordItem[]>(loadRecords());
-const form = reactive<Record<string, string | number>>(createBlank());
-const note = ref("");
-const filter = ref(project.filters[0]);
-
-const filteredRecords = computed(() => {
-  if (filter.value.startsWith("全部")) return records.value;
-  return records.value.filter((record) => Object.values(record).includes(filter.value));
-});
-
-const metrics = computed(() => {
-  const total = records.value.length;
-  const second = records.value.filter((record) => record.status === statuses[1]).length;
-  const third = records.value.filter((record) => record.status === statuses[2]).length;
-  const numberValues = records.value.flatMap((record) =>
-    fields.filter((field) => field.type === "number").map((field) => Number(record[field.key] || 0))
-  );
-  const sum = numberValues.reduce((acc, value) => acc + value, 0);
-  return [total, second || sum, third || Math.round(sum / Math.max(total, 1))];
-});
-
-const chartRows = computed(() => statuses.map((status) => ({
-  status,
-  value: records.value.filter((record) => record.status === status).length
-})));
-
-const maxChart = computed(() => Math.max(1, ...chartRows.value.map((row) => row.value)));
-
-function persist() {
-  localStorage.setItem(project.storageKey, JSON.stringify(records.value));
-}
-
-function nextStatus(status: string) {
-  const index = statuses.indexOf(status);
-  return statuses[(index + 1) % statuses.length];
-}
-
-function primaryText(record: RecordItem) {
-  const first = fields[0];
-  const second = fields[1];
-  return [record[first.key], record[second.key]].filter(Boolean).join(" / ") || project.entityLabel;
-}
-
-function submit() {
-  records.value = [
-    {
-      ...form,
-      id: crypto.randomUUID(),
-      status: statuses[0],
-      notes: note.value || "暂无备注",
-      createdAt: new Date().toISOString()
-    } as RecordItem,
-    ...records.value
-  ];
-  Object.assign(form, createBlank());
-  note.value = "";
-  persist();
-}
-
-function flow(record: RecordItem) {
-  record.status = nextStatus(record.status);
-  persist();
-}
-
-function remove(id: string) {
-  records.value = records.value.filter((record) => record.id !== id);
-  persist();
-}
+const metrics = computed(() => store.metrics);
 </script>
 
 <template>
@@ -192,78 +54,173 @@ function remove(id: string) {
     <div class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">{{ project.industry }}行业前端最小闭环</p>
-          <h1>{{ project.title }}</h1>
-          <p class="subtitle">{{ project.subtitle }}</p>
+          <p class="eyebrow">物流 · 接力派车</p>
+          <h1>车辆调度与接力单</h1>
+          <p class="subtitle">
+            任务按站点拆段，每段绑定车辆、司机和起止时段；司机连续在途超过 4 小时强制接力，
+            检修车辆不得排入。资源不可用时未出发段退回待接力区，在途段到站登记后再交接。
+          </p>
         </div>
-        <div class="stack">
-          <span v-for="item in project.stack" :key="item" class="tag">{{ item }}</span>
+        <div class="top-actions">
+          <el-select v-model="operator" style="width: 130px">
+            <el-option v-for="o in operators" :key="o" :label="o" :value="o" />
+          </el-select>
+          <el-button @click="createVisible = true">新建任务</el-button>
+          <el-button plain @click="simulateFailOnce">模拟一次保存失败</el-button>
+          <el-button plain type="info" @click="resetAll">重置数据</el-button>
         </div>
       </header>
 
       <section class="metrics">
-        <article v-for="(label, index) in project.metricLabels" :key="label" class="metric">
-          <span>{{ label }}</span>
-          <strong>{{ metrics[index] }}</strong>
+        <article class="metric">
+          <span>车辆（检修 {{ metrics.vehiclesMaintenance }}）</span>
+          <strong>{{ metrics.vehiclesBusy }}/{{ metrics.vehiclesTotal }}</strong>
+          <em>占用/总数</em>
+        </article>
+        <article class="metric">
+          <span>在途段</span>
+          <strong>{{ metrics.legsDeparted }}</strong>
+          <em>绑定冻结</em>
+        </article>
+        <article class="metric">
+          <span>待接力段</span>
+          <strong>{{ metrics.legsWaiting }}</strong>
+          <em>等待车/人</em>
+        </article>
+        <article class="metric">
+          <span>不可用司机</span>
+          <strong>{{ metrics.driversUnavailable }}</strong>
+          <em>已自动退段</em>
         </article>
       </section>
 
-      <section class="workspace">
-        <form class="panel" @submit.prevent="submit">
-          <h2>{{ project.formTitle }}</h2>
-          <div class="form-grid">
-            <label v-for="field in fields" :key="field.key">
-              {{ field.label }}
-              <select v-if="field.type === 'select'" v-model="form[field.key]" required>
-                <option value="">请选择</option>
-                <option v-for="option in field.options" :key="option">{{ option }}</option>
-              </select>
-              <input v-else v-model="form[field.key]" :type="field.type || 'text'" required />
-            </label>
-            <label>
-              备注
-              <textarea v-model="note" placeholder="填写处理说明或现场备注" />
-            </label>
-            <button type="submit">{{ project.primaryAction }}</button>
-          </div>
-        </form>
-
-        <section class="list-panel">
-          <div class="toolbar">
-            <h2>{{ project.entityLabel }}列表</h2>
-            <select v-model="filter">
-              <option v-for="item in project.filters" :key="item">{{ item }}</option>
-            </select>
-          </div>
-
-          <div class="record-grid">
-            <div v-if="filteredRecords.length === 0" class="empty">暂无匹配数据</div>
-            <article v-for="record in filteredRecords" :key="record.id" class="record">
-              <div class="record-head">
-                <p class="record-title">{{ primaryText(record) }}</p>
-                <span class="status">{{ record.status }}</span>
-              </div>
-              <div class="details">
-                <span v-for="field in fields" :key="field.key">{{ field.label }}: {{ record[field.key] }}</span>
-              </div>
-              <p class="note">{{ record.notes }}</p>
-              <div class="actions">
-                <button type="button" @click="flow(record)">流转状态</button>
-                <button class="secondary" type="button" @click="navigator.clipboard?.writeText(primaryText(record))">复制摘要</button>
-                <button class="danger" type="button" @click="remove(record.id)">删除</button>
-              </div>
-            </article>
-          </div>
-
-          <div class="mini-chart">
-            <div v-for="row in chartRows" :key="row.status" class="bar">
-              <span>{{ row.status }}</span>
-              <div class="bar-track"><div class="bar-fill" :style="{ width: `${(row.value / maxChart) * 100}%` }" /></div>
-              <strong>{{ row.value }}</strong>
-            </div>
-          </div>
-        </section>
+      <section class="layout">
+        <div class="col-main">
+          <TaskBoard :operator="operator" @dispatch="openDispatch" />
+        </div>
+        <aside class="col-side">
+          <PendingPool @dispatch="openDispatch" />
+          <VehiclesPanel :operator="operator" class="mt14" />
+          <DriversPanel :operator="operator" class="mt14" />
+        </aside>
       </section>
+
+      <section class="mt14">
+        <HandoverLog />
+      </section>
+
+      <footer class="foot">
+        <p>
+          数据版本 v{{ store.root.version }} · 最近更新 {{ new Date(store.root.updatedAt).toLocaleString("zh-CN") }}
+          · 完整快照保存在浏览器 localStorage，重开页面可继续；保存失败时自动从最近完整记录恢复。
+        </p>
+      </footer>
     </div>
+
+    <DispatchDialog v-model:visible="dispatchVisible" :leg="activeLeg" :operator="operator" />
+    <CreateTaskDialog v-model:visible="createVisible" :operator="operator" />
   </main>
 </template>
+
+<style scoped>
+.app {
+  min-height: 100vh;
+  padding: 28px;
+  background: #eef2f7;
+}
+.shell {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 20px;
+  align-items: end;
+  margin-bottom: 20px;
+}
+.eyebrow {
+  margin: 0 0 8px;
+  color: #176b87;
+  font-weight: 700;
+  font-size: 13px;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(26px, 3.4vw, 38px);
+}
+.subtitle {
+  margin: 10px 0 0;
+  max-width: 760px;
+  color: #5b667a;
+  line-height: 1.7;
+  font-size: 14px;
+}
+.top-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.metric {
+  background: #fff;
+  border: 1px solid #dfe7f1;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.metric span {
+  display: block;
+  color: #69758c;
+  font-size: 13px;
+}
+.metric strong {
+  display: block;
+  margin: 6px 0 2px;
+  font-size: 30px;
+  line-height: 1.1;
+}
+.metric em {
+  font-style: normal;
+  color: #a0abc0;
+  font-size: 12px;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.col-side {
+  display: grid;
+  gap: 0;
+}
+.mt14 {
+  margin-top: 14px;
+}
+.foot {
+  margin-top: 16px;
+  color: #8a94a8;
+  font-size: 12px;
+  text-align: center;
+}
+.foot p {
+  margin: 0;
+}
+@media (max-width: 1000px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
